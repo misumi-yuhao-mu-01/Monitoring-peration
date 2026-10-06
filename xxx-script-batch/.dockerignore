@@ -1,0 +1,3 @@
+### dockerignoreファイル
+##Dockerのビルドに不必要なファイルやディレクトリを記載してください。
+##https://docs.docker.jp/engine/reference/builder.html#dockerignore

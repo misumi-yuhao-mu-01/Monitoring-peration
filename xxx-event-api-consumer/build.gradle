@@ -1,0 +1,9 @@
+apply from: "${misumiFwBuildPath}/eventapiconsumerproject.gradle"
+
+dependencies {
+    implementation project(':xxx-domain')
+    implementation project(':xxx-store')
+    implementation project(':xxx-model')
+
+    runtimeOnly 'org.postgresql:postgresql'
+}

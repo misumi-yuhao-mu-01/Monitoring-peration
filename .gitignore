@@ -1,0 +1,27 @@
+.DS_Store
+.gradle
+build
+out
+.idea
+!.idea/codeStyles/*
+!.idea/copyright/*
+*.iml
+
+# Ignore Gradle GUI config
+gradle-app.setting
+
+# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
+!gradle-wrapper.jar
+!ojdbc7.jar
+
+# Cache of project
+.gradletasknamecache
+
+# dev-tool
+misumi-fw-devtool/containers/*/data/*
+
+#eclipse files
+.classpath
+.project
+.settings
+bin

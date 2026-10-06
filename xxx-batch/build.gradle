@@ -1,0 +1,9 @@
+apply from: "${misumiFwBuildPath}/batchproject.gradle"
+
+dependencies {
+    implementation project(':xxx-common')
+    implementation project(':xxx-domain')
+    implementation project(':xxx-store')
+
+    runtimeOnly 'org.postgresql:postgresql'
+}

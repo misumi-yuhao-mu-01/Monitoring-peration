@@ -1,0 +1,6 @@
+[submodule "misumi-fw-build"]
+	path = misumi-fw-build
+	url = https://github.com/misumi-org/misumi-fw-build.git
+[submodule "misumi-api-spec"]
+	path = misumi-api-spec
+	url = https://github.com/misumi-org/misumi-api-spec.git

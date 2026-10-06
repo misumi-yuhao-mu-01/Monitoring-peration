@@ -1,0 +1,6 @@
+apply from: "${misumiFwBuildPath}/storeproject.gradle"
+
+dependencies {
+    implementation project(':xxx-common')
+    implementation project(':xxx-domain')
+}

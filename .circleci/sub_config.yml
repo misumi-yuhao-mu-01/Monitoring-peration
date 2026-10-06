@@ -1,0 +1,709 @@
+## インフラ構築向けパイプライン
+version: 2.1
+orbs:
+  aws: circleci/aws-cli@5.4.1
+  kubernetes: circleci/kubernetes@0.12.0
+## パイプラインパラメータを定義
+parameters:
+  # システム名 actなど
+  system:
+    type: string
+    default: "xxx" # ★アプリチームで編集する。xxxを自サービス名に書き換える
+
+  # path-filtering用パラメータ
+  rest-api_container_build:
+    type: boolean
+    default: true
+  async-api-consumer_container_build:
+    type: boolean
+    default: true
+  event-api-consumer_container_build:
+    type: boolean
+    default: true
+  batch_container_build:
+    type: boolean
+    default: true
+  script-batch_container_build:
+    type: boolean
+    default: true
+  domain_build:
+    type: boolean
+    default: true
+  common_build:
+    type: boolean
+    default: true
+  store_build:
+    type: boolean
+    default: true
+  client_build:
+    type: boolean
+    default: true
+  all_container_build:
+    type: boolean
+    default: false
+
+  # CircleCIを実行したユーザ(API実行したトークンから自動判別)
+  git_exe_user:
+    type: string
+    default: "${CIRCLE_USERNAME}"
+  # インフラ共通GitHubユーザ名
+  git_act_user:
+    type: string
+    default: "msmw-npf-arc-github-act-ext%40nri.co.jp"
+  # GitHubのOrganizationID misumi-orgなど
+  git_project_id:
+    type: string
+    default: "misumi-org"
+  infra_script_version_tag:
+    type: string
+    default: "20220303_01"
+
+  tag_rule:
+    type: string
+    default: /^v.*/
+
+## CircleCI上で実行するdockerイメージを定義
+executors:
+  # 簡単な処理に仕様されるデフォルトイメージ
+  default:
+    machine:
+      image: ubuntu-2204:current
+    working_directory: ~/misumi-fw-sample-service
+    environment:
+      JAVA_OPTS: -Xmx2g
+      GRADLE_OPTS: "-Dorg.gradle.parallel=true"
+  cimg_base:
+    docker:
+      - image: cimg/base:2021.01
+
+commands:
+  install_amzn_corretto:
+    steps:
+      - run:
+          name: install amzn corretto
+          command: |
+            curl https://corretto.aws/downloads/resources/11.0.18.10.1/java-11-amazon-corretto-jdk_11.0.18.10-1_amd64.deb \
+              --output /tmp/java-11-amazon-corretto-jdk_11.0.18.10-1_amd64.deb
+            sudo dpkg --install /tmp/java-11-amazon-corretto-jdk_11.0.18.10-1_amd64.deb
+            sudo update-alternatives --set java /usr/lib/jvm/java-11-amazon-corretto/bin/java
+            sudo update-alternatives --set javac /usr/lib/jvm/java-11-amazon-corretto/bin/javac
+            java -version
+  restore_gradle_cache:
+    steps:
+      - restore_cache:
+          keys:
+            - v2-dependencies-{{ arch }}-{{ checksum "build.gradle" }}
+            - v2-dependencies-{{ checksum "build.gradle" }}
+  save_gradle_cache:
+    steps:
+      - save_cache:
+          paths:
+            - ~/.gradle/caches
+            - ~/.gradle/wrapper
+          key: v2-dependencies-{{ arch }}-{{ checksum "build.gradle" }}
+  docker_compose_up:
+    steps:
+      - run: docker-compose -f ./<< pipeline.parameters.system >>-devtool/containers/docker-compose.yml up -d
+      - run: sleep 10
+  checkout_with_submodule:
+    steps:
+      - run: git config --global url."https://${git_exe_user}:${git_exe_user_token}@github.com/misumi-org/".insteadOf "https://github.com/misumi-org/"
+      - checkout
+      - run: git submodule sync
+      - run: git submodule update --init
+  clone_with_common_submodule:
+    steps:
+      - run:
+          name: clone act-common
+          command: |
+            echo "tag=<< pipeline.parameters.infra_script_version_tag >>"
+            (cd /tmp/ && git clone -b << pipeline.parameters.infra_script_version_tag >> https://<< pipeline.parameters.git_act_user >>:${act_githubtoken}@github.com/misumi-org/act-common)
+  push_docker_image_2_ecr: 
+    parameters:
+      docker_file_path:
+        type: string
+    steps:
+    - aws/setup:
+        role_arn: $OIDC_ASSUME_ROLE_ARN
+        region: $ecr_region
+        profile_name: "ecr_profile"
+        version: "2.28.6"
+    # AWS中国ECR対応のみ。
+    - run:
+        name: Login to AWS ECR
+        command: |
+          aws ecr get-login-password --profile ecr_profile | \
+            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$ecr_region.amazonaws.com.cn
+    - run:
+        name: Ecr repo exists check, tag and push imge to ecr
+        command: |
+            docker_file_path=<< parameters.docker_file_path >>
+            for docker_file in `cd ${docker_file_path} && ls Dockerfile*`;
+            do
+              ecr_repo="${git_project_id}/${CIRCLE_PROJECT_REPONAME}/${docker_file#*_}"
+              if ! aws ecr describe-repositories --repository-names ${ecr_repo} --profile ecr_profile >/dev/null 2>&1; then
+                echo "ECR repo not exists, creating ${ecr_repo} ..."
+                aws ecr create-repository --repository-name ${ecr_repo} --profile ecr_profile 
+              fi
+              aws ecr set-repository-policy \
+              --repository-name "${ecr_repo}" \
+              --policy-text '{
+                "Version": "2008-10-17",
+                "Statement": [
+                  {
+                    "Sid": "RepoFullAccess",
+                    "Effect": "Allow",
+                    "Principal": {
+                      "AWS": [
+                        "arn:aws-cn:iam::529494415117:root",
+                        "arn:aws-cn:iam::529309397396:root",
+                        "arn:aws-cn:iam::529515192371:root",
+                        "arn:aws-cn:iam::529462028640:root",
+                        "arn:aws-cn:iam::529286536785:root",
+                        "arn:aws-cn:iam::529389656042:root",
+                        "arn:aws-cn:iam::529447295636:root",
+                        "arn:aws-cn:iam::529410995718:root",
+                        "arn:aws-cn:iam::529438924346:root",
+                        "arn:aws-cn:iam::456196276695:root",
+                        "arn:aws-cn:iam::529453950663:root",
+                        "arn:aws-cn:iam::529468836852:root",
+                        "arn:aws-cn:iam::529522694327:root",
+                        "arn:aws-cn:iam::529480830661:root",
+                        "arn:aws-cn:iam::529509339383:root",
+                        "arn:aws-cn:iam::529485928294:root",
+                        "arn:aws-cn:iam::529367955741:root",
+                        "arn:aws-cn:iam::529428234133:root"
+                      ]
+                    },
+                    "Action": [
+                      "ecr:BatchCheckLayerAvailability",
+                      "ecr:BatchGetImage",
+                      "ecr:GetAuthorizationToken",
+                      "ecr:GetDownloadUrlForLayer"
+                    ]
+                  }
+                ]
+              }' \
+              --profile ecr_profile
+              echo "Start to push image to ecr (cn)"          
+              src_image="ghcr.io/${ecr_repo}"
+              dst_repo=$AWS_ACCOUNT_ID.dkr.ecr.$ecr_region.amazonaws.com.cn/${ecr_repo}
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep "^${src_image}:" | while read fullname; do
+                tag="${fullname##*:}"
+                docker tag "${src_image}:$tag" "$dst_repo:$tag"
+                echo docker push "$dst_repo:$tag"
+                docker push "$dst_repo:$tag"
+                if [ $? -ne 0 ]; then
+                  echo "Push error: $dst_repo:$tag"
+                  exit 1
+                fi
+              done
+              echo "End to push image to ecr (cn)"
+            done
+            docker ps
+  init_ecr_for_gradle: 
+    parameters:
+      target:
+        type: string
+    steps:
+    - aws/setup:
+        role_arn: $OIDC_ASSUME_ROLE_ARN
+        region: $ecr_region
+        profile_name: "ecr_profile"
+        version: "2.28.6"
+    # AWS中国ECR対応のみ。
+    - run:
+        name: Login to AWS ECR
+        command: |
+          aws ecr get-login-password --profile ecr_profile | \
+            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$ecr_region.amazonaws.com.cn
+    - run:
+        name: Ensure AWS ECR Repository Exists
+        command: |
+            target=<< parameters.target >>
+            ecr_repo=${CIRCLE_PROJECT_REPONAME}/ghcr-m-${target//:/}
+            if ! aws ecr describe-repositories --repository-names ${ecr_repo} --profile ecr_profile >/dev/null 2>&1; then
+                echo "ECR repo not exists, creating ${ecr_repo} ..."
+                aws ecr create-repository --repository-name ${ecr_repo} --profile ecr_profile 
+            fi
+            aws ecr set-repository-policy \
+              --repository-name "${ecr_repo}" \
+              --policy-text '{
+                "Version": "2008-10-17",
+                "Statement": [
+                  {
+                    "Sid": "RepoFullAccess",
+                    "Effect": "Allow",
+                    "Principal": {
+                      "AWS": [
+                        "arn:aws-cn:iam::529494415117:root",
+                        "arn:aws-cn:iam::529309397396:root",
+                        "arn:aws-cn:iam::529515192371:root",
+                        "arn:aws-cn:iam::529462028640:root",
+                        "arn:aws-cn:iam::529286536785:root",
+                        "arn:aws-cn:iam::529389656042:root",
+                        "arn:aws-cn:iam::529447295636:root",
+                        "arn:aws-cn:iam::529410995718:root",
+                        "arn:aws-cn:iam::529438924346:root",
+                        "arn:aws-cn:iam::456196276695:root",
+                        "arn:aws-cn:iam::529453950663:root",
+                        "arn:aws-cn:iam::529468836852:root",
+                        "arn:aws-cn:iam::529522694327:root",
+                        "arn:aws-cn:iam::529480830661:root",
+                        "arn:aws-cn:iam::529509339383:root",
+                        "arn:aws-cn:iam::529485928294:root",
+                        "arn:aws-cn:iam::529367955741:root",
+                        "arn:aws-cn:iam::529428234133:root"
+                      ]
+                    },
+                    "Action": [
+                      "ecr:BatchCheckLayerAvailability",
+                      "ecr:BatchGetImage",
+                      "ecr:GetAuthorizationToken",
+                      "ecr:GetDownloadUrlForLayer"
+                    ]
+                  }
+                ]
+              }' \
+              --profile ecr_profile
+  setup_env_vars:
+    steps:
+      - run:
+          name: setup env vars
+          command: |
+            export git_exe_user=<< pipeline.parameters.git_exe_user >>
+            echo "export git_exe_user=<< pipeline.parameters.git_exe_user >>" >> $BASH_ENV
+            export token_key=`echo "${git_exe_user//-/_}_githubtoken"`
+            echo "export git_exe_user_token=`eval echo '$'${token_key}`" >> $BASH_ENV
+            # AWS中国ECR対応のみ。
+            export ecr_region="cn-northwest-1"
+            echo "export ecr_region=cn-northwest-1" >> $BASH_ENV      
+            export git_project_id=<< pipeline.parameters.git_project_id >>
+            echo "export git_project_id=<< pipeline.parameters.git_project_id >>" >> $BASH_ENV 
+
+## executorsで定義したdockerイメージ上で実行するジョブを記載
+jobs:
+  pipeline_start:
+    executor:
+      name: default
+    steps:
+      - run:
+          name: pipeline_start
+          command: |
+            set -x
+            echo "Execution date=`date`"
+            echo "Processing branch=${CIRCLE_PROJECT_REPONAME}"
+            echo "Processing branch=${CIRCLE_BRANCH}"
+            echo "Execution user=${CIRCLE_USERNAME}"
+            echo "CircleCIにて処理を実行します。"
+  apl_module_build:
+    parameters:
+      target:
+        type: string
+        default: ""
+    executor:
+      name: default
+    steps:
+      - setup_env_vars
+      - install_amzn_corretto
+      - checkout_with_submodule
+      - restore_gradle_cache
+      - run:
+          name: application build
+          command: |
+            printenv
+            ./gradlew << parameters.target >>build -x test
+      - save_gradle_cache
+      - store_artifacts:
+          path: ./build/reports/profile
+          destination: gradleProf
+      - persist_to_workspace:
+          root: ~/misumi-fw-sample-service
+          paths: "*"
+
+  apl_module_test:
+    parameters:
+      target:
+        type: string
+        default: ""
+    executor:
+      name: default
+    steps:
+      - setup_env_vars
+      - attach_workspace:
+          at: ./
+      - docker_compose_up
+      - restore_gradle_cache
+      - install_amzn_corretto
+      - run:
+          name: application unittest
+          command: |
+            ./gradlew << parameters.target >>test testReport
+      - store_artifacts:
+          path: ./build/reports/jacoco/jacocoRootReport/html
+          destination: jacoco
+      - store_artifacts:
+          path: ./build/reports/tests
+          destination: junit
+      - store_artifacts:
+          path: ./build/reports/profile
+          destination: gradleProf
+      - save_gradle_cache
+  script_test:
+    parameters:
+      docker_file_path:
+        type: string
+        default: ""
+    executor:
+      name: cimg_base
+    steps:
+      - checkout
+      - clone_with_common_submodule
+      - run:
+          name: script test
+          command: |
+            set -eux
+            docker_file_path="<< parameters.docker_file_path >>"
+
+            ## act-common のスクリプトを移動
+            mv /tmp/act-common/script/scripts_for_xxx-service .circleci/infra_tool
+
+            .circleci/infra_tool/pipeline_script_test.sh ${docker_file_path}
+
+  docker_file_build_and_push:
+    parameters:
+      target:
+        type: string
+        default: ""
+    executor:
+      name: default
+    steps:
+      - setup_env_vars
+      - install_amzn_corretto
+      - attach_workspace:
+          at: ./
+      - restore_gradle_cache
+      - init_ecr_for_gradle:
+          target: "<< parameters.target >>"
+      - run:
+          name: application container build
+          command: |
+            printenv
+            ./gradlew << parameters.target >>jib
+            ./gradlew << parameters.target >>jib -x spotlessCheck -x generateJsonSchema2Pojo -Pecr.registry=$AWS_ACCOUNT_ID.dkr.ecr.$ecr_region.amazonaws.com.cn -Pecr.token=$(aws ecr get-login-password --profile ecr_profile)
+      - store_artifacts:
+          path: ./build/reports/profile
+          destination: gradleProf
+      - save_gradle_cache
+
+  docker_file_build_and_push_for_dockerfile:
+    parameters:
+      docker_file_path:
+        type: string
+        default: ""
+    executor:
+      name: cimg_base
+    steps:
+      - setup_remote_docker:
+          version: 20.10.11
+      - checkout
+      - clone_with_common_submodule
+      - setup_env_vars
+      - run:
+          name: container build
+          command: |
+            set -eux
+            docker_file_path="<< parameters.docker_file_path >>"
+            git_act_user="<< pipeline.parameters.git_act_user >>"
+            git_project_id="<< pipeline.parameters.git_project_id >>"
+
+            ## act-common のスクリプトを移動
+            mv /tmp/act-common/script/scripts_for_xxx-service .circleci/infra_tool
+            ## docker ログイン(実行ユーザ)
+            echo "${git_exe_user_token}" | docker login ghcr.io -u ${git_exe_user} --password-stdin
+            ## Docker Build
+            .circleci/infra_tool/pipeline_docker_build.sh \
+                ${docker_file_path}
+            ## Docker Push
+            .circleci/infra_tool/pipeline_docker_push.sh \
+                ${docker_file_path} ${git_project_id} ${CIRCLE_PROJECT_REPONAME} ${CIRCLE_SHA1} ${CIRCLE_BRANCH}
+            ## docker ログイン(共通ユーザ)
+            echo "${act_githubtoken}" | docker login ghcr.io -u ${git_act_user} --password-stdin
+            ## From イメージにタグ付与
+            .circleci/infra_tool/pipeline_docker_tag_for_fromimage.sh \
+                ${docker_file_path}
+
+      - push_docker_image_2_ecr:
+          docker_file_path: "<< parameters.docker_file_path >>"
+
+  ## パイプライン実行管理外のディレクトリに更新が入ったときの処理 ##
+  no_job_execution:
+    docker:
+      - image: cimg/base:2021.01
+    environment:
+      TZ: "JST-9"
+    steps:
+      - run:
+          name: no_job_execution
+          command: |
+            echo "Job execution is skipped because there is no update in the corresponding directory."
+workflows:
+  rest-api_container_build:
+    when: << pipeline.parameters.rest-api_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-rest-api:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-rest-api:"
+          filters: 
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - apl_module_build
+      - docker_file_build_and_push:
+          target: ":<< pipeline.parameters.system >>-rest-api:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - apl_module_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  async-api-consumer_container_build:
+    when: << pipeline.parameters.async-api-consumer_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-async-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-async-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - apl_module_build
+      - docker_file_build_and_push:
+          target: ":<< pipeline.parameters.system >>-async-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - apl_module_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  event-api-consumer_container_build:
+    when: << pipeline.parameters.event-api-consumer_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-event-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-event-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - apl_module_build
+      - docker_file_build_and_push:
+          target: ":<< pipeline.parameters.system >>-event-api-consumer:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - apl_module_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  batch_container_build:
+    when: << pipeline.parameters.batch_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-batch:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-batch:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - apl_module_build
+      - docker_file_build_and_push:
+          target: ":<< pipeline.parameters.system >>-batch:"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - apl_module_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  script_batch_container_build:
+    when: << pipeline.parameters.script-batch_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - script_test:
+          docker_file_path: "<< pipeline.parameters.system >>-script-batch"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+          context:
+            - github_token
+      - docker_file_build_and_push_for_dockerfile:
+          docker_file_path: "<< pipeline.parameters.system >>-script-batch"
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - script_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  domain_build:
+    when: << pipeline.parameters.domain_build >>
+    jobs:
+      - pipeline_start
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-domain:"
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-domain:"
+          requires:
+            - apl_module_build
+
+  client_build:
+    when: << pipeline.parameters.client_build >>
+    jobs:
+      - pipeline_start
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-client:"
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-client:"
+          requires:
+            - apl_module_build
+
+  store_build:
+    when: << pipeline.parameters.store_build >>
+    jobs:
+      - pipeline_start
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-store:"
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-store:"
+          requires:
+            - apl_module_build
+
+  common_build:
+    when: << pipeline.parameters.common_build >>
+    jobs:
+      - pipeline_start
+      - apl_module_build:
+          target: ":<< pipeline.parameters.system >>-common:"
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          target: ":<< pipeline.parameters.system >>-common:"
+          requires:
+            - apl_module_build
+
+  all_container_build:
+    when: << pipeline.parameters.all_container_build >>
+    jobs:
+      - pipeline_start:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+      - apl_module_build:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - pipeline_start
+      - apl_module_test:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+          requires:
+            - apl_module_build
+      - docker_file_build_and_push:
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_rule >>
+            branches:
+              only: /develop/
+          requires:
+            - apl_module_test
+          context:
+            - github_token
+            - ntinf_prd_aws_cn_oidc
+
+  no_job_execution:
+    when:
+      and:
+        - not: << pipeline.parameters.rest-api_container_build >>
+        - not: << pipeline.parameters.async-api-consumer_container_build >>
+        - not: << pipeline.parameters.event-api-consumer_container_build >>
+        - not: << pipeline.parameters.batch_container_build >>
+        - not: << pipeline.parameters.script-batch_container_build >>
+        - not: << pipeline.parameters.all_container_build >>
+    jobs:
+      - no_job_execution

@@ -1,0 +1,5 @@
+apply from: "${misumiFwBuildPath}/clientproject.gradle"
+
+dependencies {
+    implementation project(':xxx-model')
+}

@@ -1,0 +1,7 @@
+apply from: "${misumiFwBuildPath}/restapiproject.gradle"
+
+dependencies {
+    implementation project(':xxx-model')
+
+    runtimeOnly 'org.postgresql:postgresql'
+}

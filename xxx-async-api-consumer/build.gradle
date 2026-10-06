@@ -1,0 +1,12 @@
+apply from: "${misumiFwBuildPath}/asyncapiconsumerproject.gradle"
+
+dependencies {
+    implementation project(':xxx-common')
+    implementation project(':xxx-model')
+    implementation project(':xxx-domain')
+    implementation project(':xxx-store')
+    implementation project(':xxx-client')
+    implementation "jp.co.misumi.fw:misumi-fw-rest-api-client:${misumiFwVersion}"
+
+    runtimeOnly 'org.postgresql:postgresql'
+}

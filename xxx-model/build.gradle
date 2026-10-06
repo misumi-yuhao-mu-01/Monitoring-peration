@@ -1,0 +1,1 @@
+apply from: "$misumiFwBuildPath/modelproject.gradle"

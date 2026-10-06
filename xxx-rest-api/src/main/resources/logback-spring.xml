@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+	<include resource="jp/co/misumi/fw/common/logging/logback/rest/api/logback-base.xml"/>
+</configuration>

@@ -1,0 +1,30 @@
+version: 2.1
+setup: true
+orbs:
+  path-filtering: circleci/path-filtering@0.0.2
+parameters:
+  # システム
+  system:
+    type: string
+    default: "xxx" # ★アプリチームで編集する。xxxを自サービス名に書き換える
+workflows:
+  setup-workflow:
+    jobs:
+      - path-filtering/filter:
+          filters:
+            tags:
+              only: /^v.*/
+          base-revision: "HEAD~1"
+          config-path: .circleci/sub_config.yml
+          mapping: |
+            ## アプリコンテナビルド ##
+            << pipeline.parameters.system >>-rest-api/.*               rest-api_container_build                        true
+            << pipeline.parameters.system >>-async-api-consumer/.*     async-api-consumer_container_build              true
+            << pipeline.parameters.system >>-event-api-consumer/.*     event-api-consumer_container_build              true
+            << pipeline.parameters.system >>-batch/.*                  batch_container_build                           true
+            << pipeline.parameters.system >>-script-batch/.*           script-batch_container_build                    false
+            << pipeline.parameters.system >>-domain/.*                 domain_build                                    true
+            << pipeline.parameters.system >>-store/.*                  store_build                                     true
+            << pipeline.parameters.system >>-common/.*                 common_build                                    true
+            << pipeline.parameters.system >>-client/.*                 client_build                                    true
+            << pipeline.parameters.system >>/.*                        all_container_build                             false

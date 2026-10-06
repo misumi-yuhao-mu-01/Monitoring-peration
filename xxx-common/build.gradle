@@ -1,0 +1,4 @@
+apply from: "${misumiFwBuildPath}/commonproject.gradle"
+
+dependencies {
+}

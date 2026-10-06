@@ -1,0 +1,65 @@
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    url: jdbc:postgresql://localhost:5432/misumi
+    driverClassName: org.postgresql.Driver
+    username: postgres
+    password: postgres
+misumi:
+  fw:
+    common:
+      apikey: dummy-api-key
+      s3:
+        clients:
+          - name: default
+            region: "us-east-1"
+            endpointUrl: "http://localhost:4566/"
+            credential:
+              profile: default
+            maxFileSize: 50
+            presignedUrlExpires: 60 # second
+      operationDate:
+        jdbc:
+          selectQuery: "select operation_date from operation_date_table where service_code = 'IVT'" #運用日付取得SQL定義
+    rest:
+      client:
+        endpoints:
+          - name: order
+            host: localhost
+            port: 8080
+            path: /api/v1
+            useSSL: false
+      file:
+        upload:
+          server:
+            enabled: true
+            objectStorageClientName: default
+            signatureSecret: "XXX"
+            quarantineBucket: "quarantine"
+            tempBucket: "temp"
+            virusBucket: "virus"
+            storeBucket: "store"
+    async:
+      common:
+        sqs:
+          region: us-east-1
+          endpointUrl: http://localhost:4566/
+        jms:
+          queue: testqueue
+    event:
+      common:
+        topics:
+          - name: streamname
+            topic: local-mjp-streamname
+      producer:
+        database:
+          eventTableName: produced_events
+          numEventTables: 2
+        kinesis:
+          region: us-east-1
+          endpointUrl: http://localhost:4566/
+          credential:
+            profile: syslink
+
+#debug: true

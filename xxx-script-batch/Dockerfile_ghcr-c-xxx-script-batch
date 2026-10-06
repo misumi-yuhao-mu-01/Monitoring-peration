@@ -1,0 +1,16 @@
+FROM ghcr.io/misumi-org/act-cicd/ghcr-c-iac-script-batch:004d2532d4453f768a68c465221f60c357262556
+
+RUN set -x && \
+    apt-get update -y
+
+COPY ./scripts/* /
+
+RUN chmod 755 /*.sh
+
+### 開発方法
+# ①Dockerコマンドを記載する
+# ②Dockerfileの名前を Dockerfile_ghcr-[layer]-[system]-[任意文字列]-script-batch にする
+#  例:ghcr-m-billing-first-script-batch
+#  例:ghcr-m-purchase-order-change-cancel-second-script-batch
+
+

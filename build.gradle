@@ -1,0 +1,85 @@
+apply plugin: 'java-library'
+
+buildscript {
+    ext {
+        misumiFwVersion = '3.2.3'
+
+        misumiFwBuildPath = "${rootDir}/misumi-fw-build/gradle"
+
+        jacocoTargetProjects = [
+                'xxx-async-api-consumer',
+                'xxx-batch',
+                'xxx-client',
+                'xxx-common',
+                'xxx-domain',
+                'xxx-event-api-consumer',
+                'xxx-rest-api',
+                'xxx-store',
+        ]
+        clientOasFiles = files(
+                // 以下をアプリチーム修正
+                // Ex. "${rootDir}/misumi-api-spec/customer-service/rest-api-spec/customer-service.yaml",
+        )
+        serverOasFiles = files(
+                // 以下をアプリチーム修正
+                "${rootDir}/misumi-api-spec/customer-service/rest-api-spec/customer-service.yaml",
+        )
+        dataFormatDirs = files(
+                // 以下をアプリチーム修正
+                // Ex. "${rootDir}/sample-cart-model/data-format-spec",
+                // Ex. "${rootDir}/misumi-api-spec/customer-service/data-format-spec",
+                "${rootDir}/xxx-model/data-format-spec",
+        )
+        metadataFiles = files(
+                //"$rootDir/misumi-api-spec/sap/rest-api-spec/sap_metadata.xml"
+        )
+
+        jibPropertiesMap = [
+                "xxx-rest-api"          : [
+                        image             : 'xxx-service/ghcr-m-xxx-rest-api',
+                        tags              : System.getenv("CIRCLE_TAG") ? [System.getenv('CIRCLE_SHA1'), System.getenv("CIRCLE_TAG")] : [System.getenv('CIRCLE_SHA1')],
+                        containerizingMode: 'packaged',
+                        ports             : ['8080'],
+                        args              : '',
+                        jvmFlags          : '-javaagent:/dd-java-agent.jar' // ローカルでコンテナ起動する場合は外してコンテナビルドすること
+                ],
+                "xxx-async-api-consumer": [
+                        image             : 'xxx-service/ghcr-m-xxx-async-consumer',
+                        tags              : System.getenv("CIRCLE_TAG") ? [System.getenv('CIRCLE_SHA1'), System.getenv("CIRCLE_TAG")] : [System.getenv('CIRCLE_SHA1')],
+                        containerizingMode: 'packaged',
+                        ports             : ['8080'],
+                        args              : 'run',
+                        jvmFlags          : '-javaagent:/dd-java-agent.jar' // ローカルでコンテナ起動する場合は外してコンテナビルドすること
+                ],
+                "xxx-event-api-consumer": [
+                        image             : 'xxx-service/ghcr-m-xxx-event-consumer',
+                        tags              : System.getenv("CIRCLE_TAG") ? [System.getenv('CIRCLE_SHA1'), System.getenv("CIRCLE_TAG")] : [System.getenv('CIRCLE_SHA1')],
+                        containerizingMode: 'packaged',
+                        ports             : ['8080'],
+                        args              : 'run',
+                        jvmFlags          : '-javaagent:/dd-java-agent.jar' // ローカルでコンテナ起動する場合は外してコンテナビルドすること
+                ],
+                "xxx-batch"             : [
+                        image             : 'xxx-service/ghcr-m-xxx-batch',
+                        tags              : System.getenv("CIRCLE_TAG") ? [System.getenv('CIRCLE_SHA1'), System.getenv("CIRCLE_TAG")] : [System.getenv('CIRCLE_SHA1')],
+                        containerizingMode: 'packaged',
+                        ports             : [],
+                        args              : '',
+                        jvmFlags          : '-javaagent:/dd-java-agent.jar' // ローカルでコンテナ起動する場合は外してコンテナビルドすること
+                ]
+        ]
+    }
+    apply from: "${misumiFwBuildPath}/buildscript.gradle"
+
+    dependencies {
+    }
+}
+
+subprojects {
+    apply from: "${misumiFwBuildPath}/subprojects.gradle"
+
+    group = 'jp.co.misumi.xxx'
+    version = System.getenv("CIRCLE_TAG") ? System.getenv("CIRCLE_TAG").replace("v","") : "3.0.0-SNAPSHOT"
+}
+
+apply from: "${misumiFwBuildPath}/rootproject.gradle"
